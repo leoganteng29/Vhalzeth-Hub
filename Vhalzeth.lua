@@ -1,93 +1,68 @@
 local out = {}
 
-table.insert(out, "=== DATA.AREAS ===")
-local areasMod = game:GetService("ReplicatedStorage"):FindFirstChild("Data")
-areasMod = areasMod and areasMod:FindFirstChild("Areas")
-if areasMod then
-    local ok, result = pcall(function() return require(areasMod) end)
-    if ok and type(result) == "table" then
-        local c = 0
-        for k, v in pairs(result) do
-            if c < 20 then
-                table.insert(out, tostring(k) .. " = " .. tostring(typeof(v)))
-                c = c + 1
-            end
-        end
-    else
-        table.insert(out, "Error: " .. tostring(result))
+local function dump(mod, label)
+    table.insert(out, "=== " .. label .. " ===")
+    if not mod then
+        table.insert(out, "NOT FOUND")
+        return
     end
+    local ok, result = pcall(function() return require(mod) end)
+    if not ok then
+        table.insert(out, "ERROR: " .. tostring(result))
+        return
+    end
+    if type(result) ~= "table" then
+        table.insert(out, "TYPE: " .. type(result) .. " | VALUE: " .. tostring(result))
+        return
+    end
+    local c = 0
+    for k, v in pairs(result) do
+        if c < 25 then
+            local vs = type(v) == "table" and ("{table, " .. #v .. " items}") or tostring(v)
+            table.insert(out, "  " .. tostring(k) .. " = " .. vs)
+            c = c + 1
+        end
+    end
+    table.insert(out, "TOTAL KEYS: " .. tostring((function() local n=0 for _ in pairs(result) do n=n+1 end return n end)()))
 end
 
-table.insert(out, "=== DATA.RARITY ===")
-local rarMod = game:GetService("ReplicatedStorage"):FindFirstChild("Data")
-rarMod = rarMod and rarMod:FindFirstChild("Rarity")
-if rarMod then
-    local ok, result = pcall(function() return require(rarMod) end)
-    if ok and type(result) == "table" then
-        local c = 0
-        for k, v in pairs(result) do
-            if c < 20 then
-                table.insert(out, tostring(k) .. " = " .. tostring(typeof(v)))
-                c = c + 1
-            end
-        end
-    else
-        table.insert(out, "Error: " .. tostring(result))
-    end
-end
+local rs = game:GetService("ReplicatedStorage")
+dump(rs.Data.Areas, "DATA.AREAS")
+dump(rs.Data.Rarity, "DATA.RARITY")
+dump(rs.Data.Currency, "DATA.CURRENCY")
+dump(rs.Shared.Remotes, "SHARED.REMOTES")
+dump(rs.Client.EggState, "CLIENT.EGGSTATE")
 
-table.insert(out, "=== SHARED.EGGS ===")
-local eggsF = game:GetService("ReplicatedStorage"):FindFirstChild("Shared")
-eggsF = eggsF and eggsF:FindFirstChild("Eggs")
+-- Sample egg di Shared.Eggs
+table.insert(out, "=== SHARED.EGGS CONTENT ===")
+local eggsF = rs.Shared:FindFirstChild("Eggs")
 if eggsF then
+    local c = 0
     for _, v in ipairs(eggsF:GetChildren()) do
-        table.insert(out, v.ClassName .. " | " .. v.Name)
-    end
-end
-
-table.insert(out, "=== SHARED.REMOTES ===")
-local remMod = game:GetService("ReplicatedStorage"):FindFirstChild("Shared")
-remMod = remMod and remMod:FindFirstChild("Remotes")
-if remMod then
-    local ok, result = pcall(function() return require(remMod) end)
-    if ok and type(result) == "table" then
-        local c = 0
-        for k, v in pairs(result) do
-            if c < 30 then
-                table.insert(out, tostring(k) .. " = " .. tostring(typeof(v)))
-                c = c + 1
+        if c < 15 then
+            table.insert(out, "  " .. v.ClassName .. " | " .. v.Name)
+            if v:IsA("ModuleScript") then
+                local ok2, r2 = pcall(function() return require(v) end)
+                if ok2 and type(r2) == "table" then
+                    local c2 = 0
+                    for k2, v2 in pairs(r2) do
+                        if c2 < 6 then
+                            table.insert(out, "    " .. tostring(k2) .. " = " .. (type(v2) == "table" and "{" .. #v2 .. "}" or tostring(v2)))
+                            c2 = c2 + 1
+                        end
+                    end
+                end
             end
+            c = c + 1
         end
-    else
-        table.insert(out, "Error: " .. tostring(result))
-    end
-end
-
-table.insert(out, "=== CLIENT.EGGSTATE ===")
-local eggState = game:GetService("ReplicatedStorage"):FindFirstChild("Client")
-eggState = eggState and eggState:FindFirstChild("EggState")
-if eggState then
-    local ok, result = pcall(function() return require(eggState) end)
-    if ok and type(result) == "table" then
-        local c = 0
-        for k, v in pairs(result) do
-            if c < 20 then
-                table.insert(out, tostring(k) .. " = " .. tostring(typeof(v)))
-                c = c + 1
-            end
-        end
-    else
-        table.insert(out, "Error: " .. tostring(result))
     end
 end
 
 local final = table.concat(out, "\n")
 print(final)
-if setclipboard then
-    setclipboard(final)
-    game:GetService("StarterGui"):SetCore("SendNotification", {
-        Title = "SCAN MODULE",
-        Text = "Hasil sudah di-copy ke clipboard!",
-        Duration = 5
-    })
-end
+if setclipboard then setclipboard(final) end
+game:GetService("StarterGui"):SetCore("SendNotification", {
+    Title = "SCAN MODULE",
+    Text = setclipboard and "Hasil sudah di-copy!" or "Cek console",
+    Duration = 5
+})
