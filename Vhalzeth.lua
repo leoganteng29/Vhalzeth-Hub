@@ -3,24 +3,23 @@ local RunService        = game:GetService("RunService")
 local UserInputService  = game:GetService("UserInputService")
 local TweenService      = game:GetService("TweenService")
 local StarterGui        = game:GetService("StarterGui")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera      = workspace.CurrentCamera
 
-local LOGO_URL = "rbxassetid://120546090415288" -- ganti dengan asset ID logo kamu
--- Cara upload: buat decal di Roblox Studio, upload gambar JPG/PNG kamu,
--- lalu ambil asset ID dari gambar tersebut (angka di URL).
+local LOGO_URL = "rbxassetid://120546090415288"
 
 local Config = {
     AutoSteal       = false,
     AutoStealDelay  = 0.15,
     InstantSteal    = false,
     ReturnToBase    = true,
+    PrioritizeHigh  = true,
+    ZonePadding     = 15,
+    RunSpeed        = 60,
     UseFlyOnMove    = false,
     FlySpeed        = 80,
     Fly             = false,
-    PrioritizeHigh  = true,
     AntiTrap        = false,
     AntiHit         = false,
     AntiGuard       = false,
@@ -41,6 +40,8 @@ local State = {
     LastScan      = 0,
     BaseCFrame    = nil,
     EggValues     = {},
+    CurrentZone   = nil,
+    Zones         = {},
     Minimized     = false,
     Connections   = {},
 }
@@ -60,7 +61,7 @@ local function getHRP() local c = getChar(); return c and c:FindFirstChild("Huma
 local function getHum() local c = getChar(); return c and c:FindFirstChildOfClass("Humanoid") end
 
 --=========================================================
---  VALUE & SCAN
+--  VALUE
 --=========================================================
 local function getEggValue(part)
     local val = 0
@@ -83,6 +84,78 @@ local function getEggValue(part)
     return val
 end
 
+--=========================================================
+--  DETEKSI ZONA OTOMATIS
+--=========================================================
+local function detectZones()
+    State.Zones = {}
+
+    -- Cari zone dari nama folder / model yang mengandung "zone", "area", "region", "map", "biome"
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        local n = obj.Name:lower()
+        if (obj:IsA("Model") or obj:IsA("Folder") or obj:IsA("BasePart")) and
+           (n:find("zone") or n:find("area") or n:find("region") or n:find("biome") or n:find("island") or n:find("land")) then
+            -- Hitung bounding box
+            local minP, maxP
+            if obj:IsA("BasePart") then
+                local half = obj.Size / 2
+                minP = obj.Position - half
+                maxP = obj.Position + half
+            else
+                local ok, cf, size = pcall(function() return obj:GetBoundingBox() end)
+                if ok and cf then
+                    local half = size / 2
+                    minP = cf.Position - half
+                    maxP = cf.Position + half
+                end
+            end
+            if minP and maxP then
+                table.insert(State.Zones, {
+                    name = obj.Name,
+                    obj  = obj,
+                    min  = minP,
+                    max  = maxP,
+                })
+            end
+        end
+    end
+
+    -- Fallback: pakai zona grid kalau tidak ada zone object
+    if #State.Zones == 0 then
+        local size = 200
+        for x = -600, 600, size do
+            for z = -600, 600, size do
+                table.insert(State.Zones, {
+                    name = "Grid_" .. x .. "_" .. z,
+                    min  = Vector3.new(x, -100, z),
+                    max  = Vector3.new(x + size, 500, z + size),
+                })
+            end
+        end
+    end
+end
+
+local function getZoneOf(pos)
+    if not State.Zones or #State.Zones == 0 then return nil end
+    for _, z in ipairs(State.Zones) do
+        local p = Config.ZonePadding
+        if pos.X >= z.min.X - p and pos.X <= z.max.X + p and
+           pos.Z >= z.min.Z - p and pos.Z <= z.max.Z + p then
+            return z
+        end
+    end
+    return nil
+end
+
+local function getCurrentZone()
+    local hrp = getHRP()
+    if not hrp then return nil end
+    return getZoneOf(hrp.Position)
+end
+
+--=========================================================
+--  SCAN WORLD
+--=========================================================
 local function computeEggValues()
     State.EggValues = {}
     for _, part in ipairs(State.EggCache) do
@@ -116,16 +189,60 @@ local function scanWorld()
     computeEggValues()
 end
 
-local function getHighestEggPrompt()
+--=========================================================
+--  EGG TERMAHAL DI ZONA SEKARANG
+--=========================================================
+local function getHighestEggInZone()
+    local hrp = getHRP()
+    if not hrp then return nil end
+    local zone = getCurrentZone()
+    if not zone then return nil end
+
+    local best, bestVal, bestDist = nil, -1, math.huge
     for _, entry in ipairs(State.EggValues) do
+        local part = entry.part
+        if part and part.Parent then
+            local pz = getZoneOf(part.Position)
+            if pz == zone then
+                local dist = (part.Position - hrp.Position).Magnitude
+                if entry.value > bestVal or (entry.value == bestVal and dist < bestDist) then
+                    bestVal = entry.value
+                    bestDist = dist
+                    best = entry
+                end
+            end
+        end
+    end
+
+    -- Fallback: kalau zone detection gagal, pakai egg terdekat di zona
+    if not best then
+        for _, entry in ipairs(State.EggValues) do
+            local part = entry.part
+            if part and part.Parent then
+                local pz = getZoneOf(part.Position)
+                if pz == zone then
+                    local dist = (part.Position - hrp.Position).Magnitude
+                    if dist < bestDist then
+                        bestDist = dist
+                        best = entry
+                    end
+                end
+            end
+        end
+    end
+
+    if best then
         for _, p in ipairs(State.PromptCache) do
-            local part = p:IsA("BasePart") and p or p.Parent
-            if part == entry.part then return p, entry end
+            local pp = p:IsA("BasePart") and p or p.Parent
+            if pp == best.part then return p, best end
         end
     end
     return nil
 end
 
+--=========================================================
+--  BASE
+--=========================================================
 local function detectBase()
     for _, obj in ipairs(workspace:GetDescendants()) do
         local n = obj.Name:lower()
@@ -142,29 +259,42 @@ local function detectBase()
     end
 end
 
-local function moveTo(targetCFrame, speed)
+--=========================================================
+--  LARI KE TARGET
+--=========================================================
+local function runTo(targetPos, speed)
+    local hum = getHum()
     local hrp = getHRP()
-    if not hrp or not targetCFrame then return end
+    if not hum or not hrp or not targetPos then return end
+    local oldSpeed = hum.WalkSpeed
+    hum.WalkSpeed = speed
+
     if Config.UseFlyOnMove or Config.Fly then
-        local startPos = hrp.Position
-        local targetPos = targetCFrame.Position
-        local dist = (targetPos - startPos).Magnitude
         local bv = Instance.new("BodyVelocity")
         bv.MaxForce = Vector3.new(1e5, 1e5, 1e5)
-        bv.Velocity = (targetPos - startPos).Unit * speed
+        bv.Velocity = (targetPos - hrp.Position).Unit * speed
         bv.Parent = hrp
-        local timeout = tick() + (dist / speed) + 1
+        local timeout = tick() + ((targetPos - hrp.Position).Magnitude / speed) + 1.5
         while tick() < timeout do
-            local h = getHRP(); if not h then break end
-            if (h.Position - targetPos).Magnitude < 3 then break end
+            local h = getHRP()
+            if not h then break end
+            if (h.Position - targetPos).Magnitude < 4 then break end
             bv.Velocity = (targetPos - h.Position).Unit * speed
             RunService.Heartbeat:Wait()
         end
         bv:Destroy()
     else
-        local tw = TweenService:Create(hrp, TweenInfo.new(0.15, Enum.EasingStyle.Linear), {CFrame = targetCFrame})
-        tw:Play(); tw.Completed:Wait()
+        hum:MoveTo(targetPos)
+        local timeout = tick() + ((targetPos - hrp.Position).Magnitude / speed) + 2
+        while tick() < timeout do
+            local h = getHRP()
+            if not h then break end
+            if (h.Position - targetPos).Magnitude < 4 then break end
+            RunService.Heartbeat:Wait()
+        end
     end
+
+    hum.WalkSpeed = oldSpeed
 end
 
 local function firePrompt(p)
@@ -175,34 +305,29 @@ local function firePrompt(p)
     end)
 end
 
-local function stealAndReturn()
+--=========================================================
+--  STEAL DI ZONA SEKARANG
+--=========================================================
+local function stealLocalZone()
     scanWorld()
     if not State.BaseCFrame then detectBase() end
-    local targetPrompt
-    if Config.PrioritizeHigh then
-        targetPrompt = getHighestEggPrompt()
-    else
-        local hrp = getHRP()
-        local best, bestDist = nil, math.huge
-        for _, p in ipairs(State.PromptCache) do
-            local part = p:IsA("BasePart") and p or p.Parent
-            if part and part:IsA("BasePart") and hrp then
-                local d = (part.Position - hrp.Position).Magnitude
-                if d < bestDist then bestDist = d; best = p end
-            end
-        end
-        targetPrompt = best
-    end
+
+    local targetPrompt, entry = getHighestEggInZone()
     if not targetPrompt then return end
-    local part = targetPrompt:IsA("BasePart") and targetPrompt or targetPrompt.Parent
-    if part and part:IsA("BasePart") then
-        moveTo(CFrame.new(part.Position + Vector3.new(0, 2, 0)), Config.FlySpeed)
+
+    local part = entry.part
+    if part and part.Parent then
+        runTo(part.Position, Config.RunSpeed)
         task.wait(0.1)
-        firePrompt(targetPrompt)
+        for _, p in ipairs(State.PromptCache) do
+            local pp = p:IsA("BasePart") and p or p.Parent
+            if pp == part then firePrompt(p); break end
+        end
         task.wait(0.15)
     end
+
     if Config.ReturnToBase and State.BaseCFrame then
-        moveTo(State.BaseCFrame, Config.FlySpeed)
+        runTo(State.BaseCFrame.Position, Config.RunSpeed)
         task.wait(0.1)
         for _, p in ipairs(State.PromptCache) do
             local pp = p:IsA("BasePart") and p or p.Parent
@@ -217,7 +342,7 @@ local function startAutoSteal()
     if State.StealConn then return end
     State.StealConn = task.spawn(function()
         while task.wait(Config.AutoStealDelay) do
-            if Config.AutoSteal then safeCall(stealAndReturn) end
+            if Config.AutoSteal then safeCall(stealLocalZone) end
         end
     end)
 end
@@ -293,7 +418,8 @@ local function startAutoTreadmill()
             local n = obj.Name:lower()
             if obj:IsA("BasePart") and (n:find("treadmill") or n:find("conveyor") or n:find("walk")) then
                 if (hrp.Position - obj.Position).Magnitude > 8 then
-                    hrp.CFrame = CFrame.new(obj.Position + Vector3.new(0, 3, 0))
+                    local hum = getHum()
+                    if hum then hum:MoveTo(obj.Position) end
                 end
                 break
             end
@@ -330,14 +456,20 @@ local function startESP()
         for _, o in ipairs(State.ESPObjects) do pcall(function() o:Remove() end) end
         State.ESPObjects = {}
         if not Config.EggESP then return end
+        local zone = getCurrentZone()
         for _, part in ipairs(State.EggCache) do
+            local inZone = (not zone) or (getZoneOf(part.Position) == zone)
             local sp, on = Camera:WorldToViewportPoint(part.Position)
             if on then
                 local txt = Drawing.new("Text")
                 local val = getEggValue(part)
                 txt.Text = part.Name .. (val > 0 and " ($" .. val .. ")" or "")
                 txt.Size = 13; txt.Center = true; txt.Outline = true
-                txt.Color = val > 5000 and Color3.fromRGB(255, 80, 80) or (val > 1000 and Color3.fromRGB(255, 200, 80) or Color3.fromRGB(120, 220, 255))
+                if inZone then
+                    txt.Color = val > 5000 and Color3.fromRGB(255, 80, 80) or (val > 1000 and Color3.fromRGB(255, 200, 80) or Color3.fromRGB(120, 220, 255))
+                else
+                    txt.Color = Color3.fromRGB(120, 120, 120)
+                end
                 txt.Position = Vector2.new(sp.X, sp.Y)
                 txt.Visible = true
                 table.insert(State.ESPObjects, txt)
@@ -377,9 +509,7 @@ ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Parent = (gethui and gethui()) or LocalPlayer:WaitForChild("PlayerGui")
 
---===== FLOATING LOGO BUTTON (muncul saat minimize) =====
 local FloatBtn = Instance.new("ImageButton")
-FloatBtn.Name = "FloatLogo"
 FloatBtn.Size = UDim2.fromOffset(56, 56)
 FloatBtn.Position = UDim2.new(0, 20, 0.5, -28)
 FloatBtn.BackgroundColor3 = Color3.fromRGB(25, 20, 40)
@@ -397,9 +527,7 @@ FloatBtn.MouseButton1Click:Connect(function()
     State.Minimized = false
 end)
 
---===== MAIN WINDOW =====
 local Main = Instance.new("Frame")
-Main.Name = "Main"
 Main.Size = UDim2.fromOffset(460, 520)
 Main.Position = UDim2.new(0.5, -230, 0.5, -260)
 Main.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
@@ -411,7 +539,6 @@ Main.Parent = ScreenGui
 local mc = Instance.new("UICorner"); mc.CornerRadius = UDim.new(0, 10); mc.Parent = Main
 local ms = Instance.new("UIStroke"); ms.Color = Color3.fromRGB(130, 90, 210); ms.Thickness = 1; ms.Transparency = 0.3; ms.Parent = Main
 
---===== TOP BAR + LOGO =====
 local Top = Instance.new("Frame")
 Top.Size = UDim2.new(1, 0, 0, 60)
 Top.BackgroundColor3 = Color3.fromRGB(30, 22, 46)
@@ -419,7 +546,6 @@ Top.BorderSizePixel = 0
 Top.Parent = Main
 local tc = Instance.new("UICorner"); tc.CornerRadius = UDim.new(0, 10); tc.Parent = Top
 
--- Logo di top bar
 local LogoImg = Instance.new("ImageLabel")
 LogoImg.Size = UDim2.fromOffset(44, 44)
 LogoImg.Position = UDim2.fromOffset(10, 8)
@@ -465,9 +591,7 @@ MinBtn.BorderSizePixel = 0
 MinBtn.Parent = Top
 local mnc = Instance.new("UICorner"); mnc.CornerRadius = UDim.new(0, 6); mnc.Parent = MinBtn
 MinBtn.MouseButton1Click:Connect(function()
-    Main.Visible = false
-    FloatBtn.Visible = true
-    State.Minimized = true
+    Main.Visible = false; FloatBtn.Visible = true; State.Minimized = true
 end)
 
 local Close = Instance.new("TextButton")
@@ -481,14 +605,10 @@ Close.TextSize = 16
 Close.BorderSizePixel = 0
 Close.Parent = Top
 local ccc = Instance.new("UICorner"); ccc.CornerRadius = UDim.new(0, 6); ccc.Parent = Close
--- Tanda silang = minimize, bukan destroy
 Close.MouseButton1Click:Connect(function()
-    Main.Visible = false
-    FloatBtn.Visible = true
-    State.Minimized = true
+    Main.Visible = false; FloatBtn.Visible = true; State.Minimized = true
 end)
 
---===== SCROLL =====
 local Scroll = Instance.new("ScrollingFrame")
 Scroll.Size = UDim2.new(1, -16, 1, -76)
 Scroll.Position = UDim2.fromOffset(8, 68)
@@ -565,14 +685,11 @@ local function mkButton(text, cb)
     return btn
 end
 
---========== TOMBOL AKSI ==========
 mkButton("Set Base Sekarang (posisi kamu)", function()
     local hrp = getHRP()
     if hrp then
         State.BaseCFrame = hrp.CFrame
-        safeCall(function()
-            StarterGui:SetCore("SendNotification", {Title = "Vhalzeth", Text = "Base disimpan.", Duration = 2})
-        end)
+        StarterGui:SetCore("SendNotification", {Title = "Vhalzeth", Text = "Base disimpan.", Duration = 2})
     end
 end)
 
@@ -581,30 +698,41 @@ mkButton("Auto Deteksi Base", function()
     detectBase()
 end)
 
-mkButton("Steal Egg Termahal Sekarang", function()
-    scanWorld()
-    local p, entry = getHighestEggPrompt()
-    if p and entry then
-        local part = entry.part
-        moveTo(CFrame.new(part.Position + Vector3.new(0, 2, 0)), Config.FlySpeed)
-        task.wait(0.1)
-        firePrompt(p)
-        if Config.ReturnToBase and State.BaseCFrame then
-            task.wait(0.2)
-            moveTo(State.BaseCFrame, Config.FlySpeed)
+mkButton("Scan Zona Sekarang", function()
+    detectZones()
+    StarterGui:SetCore("SendNotification", {
+        Title = "Vhalzeth",
+        Text = "Zona terdeteksi: " .. #State.Zones,
+        Duration = 2
+    })
+end)
+
+mkButton("Steal Egg Termahal (Zona Ini)", function()
+    safeCall(function()
+        scanWorld()
+        local p, entry = getHighestEggInZone()
+        if p and entry and entry.part and entry.part.Parent then
+            runTo(entry.part.Position, Config.RunSpeed)
+            task.wait(0.1)
+            firePrompt(p)
+            if Config.ReturnToBase and State.BaseCFrame then
+                task.wait(0.2)
+                runTo(State.BaseCFrame.Position, Config.RunSpeed)
+            end
         end
-    end
+    end)
 end)
 
 mkButton("Tampilkan Daftar Telur (Console)", function()
     scanWorld()
     print("=== DAFTAR TELUR (MAHAL -> MURAH) ===")
     for i, e in ipairs(State.EggValues) do
-        print(i .. ". " .. e.name .. " | Value: " .. e.value)
+        local zone = e.part and getZoneOf(e.part.Position)
+        print(i .. ". " .. e.name .. " | Value: " .. e.value .. " | Zona: " .. (zone and zone.name or "?"))
     end
 end)
 
-mkToggle("Auto Steal + Balik Base", false, function(on) Config.AutoSteal = on; if on then startAutoSteal() end end)
+mkToggle("Auto Steal (Zona Sekarang)", false, function(on) Config.AutoSteal = on; if on then startAutoSteal() end end)
 mkToggle("Instant Steal All", false, function(on) Config.InstantSteal = on; if on then startInstantSteal() end end)
 mkToggle("Prioritaskan Egg Termahal", true, function(on) Config.PrioritizeHigh = on end)
 mkToggle("Auto Balik Base Setelah Steal", true, function(on) Config.ReturnToBase = on end)
@@ -638,6 +766,7 @@ end)
 --=========================================================
 godModeLoop()
 startMisc()
+detectZones()
 scanWorld()
 detectBase()
 startAutoSteal()
@@ -653,7 +782,7 @@ end))
 safeCall(function()
     StarterGui:SetCore("SendNotification", {
         Title = "Vhalzeth Hub",
-        Text = "Loaded. Klik silang = minimize, klik logo = muncul lagi.",
+        Text = "Loaded. Auto Steal cuma di zona sekarang.",
         Duration = 5
     })
 end)
