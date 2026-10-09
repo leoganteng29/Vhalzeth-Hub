@@ -1,35 +1,64 @@
-local out = {}
-table.insert(out, "=== WORKSPACE CHILDREN ===")
-for _,v in ipairs(workspace:GetChildren()) do
-    table.insert(out, v.ClassName .. " | " .. v.Name)
-end
-
-table.insert(out, "=== REPLICATEDSTORAGE ===")
-for _,v in ipairs(game:GetService("ReplicatedStorage"):GetChildren()) do
-    table.insert(out, v.ClassName .. " | " .. v.Name)
-end
-
-table.insert(out, "=== AREA/EZONE SCAN ===")
-for _,v in ipairs(workspace:GetDescendants()) do
-    local n = v.Name:lower()
-    if n:find("forest") or n:find("lake") or n:find("desert") or n:find("jungle")
-    or n:find("snow") or n:find("volcano") or n:find("abyss") or n:find("cosmic")
-    or n:find("cherry") or n:find("titan") or n:find("angel") or n:find("enchanted")
-    or n:find("prehistoric") or n:find("area") or n:find("zone") then
-        table.insert(out, v.ClassName .. " | " .. v:GetFullName())
+print("=== AREA NAMES ===")
+local areasFolder = workspace:FindFirstChild("World")
+areasFolder = areasFolder and areasFolder:FindFirstChild("Areas")
+local guardAreas = areasFolder and areasFolder:FindFirstChild("GuardAreas")
+if guardAreas then
+    for _, area in ipairs(guardAreas:GetChildren()) do
+        print("AREA:", area.Name, "| Class:", area.ClassName)
+        local nests = area:FindFirstChild("Nests")
+        if nests then
+            for _, nest in ipairs(nests:GetChildren()) do
+                if nest.Name:lower():find("nest") then
+                    print("  NEST:", nest:GetFullName())
+                    for _, child in ipairs(nest:GetDescendants()) do
+                        if child:IsA("NumberValue") or child:IsA("IntValue") or child:IsA("StringValue") then
+                            print("    VALUE:", child.ClassName, child.Name, "=", child.Value)
+                        end
+                        if child:IsA("BasePart") and (child.Name:lower():find("egg") or child.Name:lower():find("value")) then
+                            print("    PART:", child.Name)
+                            for _, a in ipairs(child:GetAttributes()) do
+                                print("      ATTR:", a, "=", child:GetAttribute(a))
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        break
     end
 end
 
-table.insert(out, "=== EGG SAMPLE ===")
-local c = 0
-for _,v in ipairs(workspace:GetDescendants()) do
-    if v.Name:lower():find("egg") and c < 20 then
-        table.insert(out, v.ClassName .. " | " .. v:GetFullName())
-        c = c + 1
+print("=== EGG SLOTS SAMPLE ===")
+local aes = workspace:FindFirstChild("AreaEggSlotsClient")
+if aes then
+    local c = 0
+    for _, slot in ipairs(aes:GetChildren()) do
+        if c < 10 then
+            print("SLOT:", slot.Name)
+            for _, d in ipairs(slot:GetDescendants()) do
+                if d:IsA("NumberValue") or d:IsA("IntValue") or d:IsA("StringValue") then
+                    print("  VAL:", d.ClassName, d.Name, "=", d.Value)
+                end
+                if d:IsA("BasePart") then
+                    for _, a in ipairs(d:GetAttributes()) do
+                        print("  ATTR:", d.Name, a, "=", d:GetAttribute(a))
+                    end
+                end
+            end
+            c = c + 1
+        end
     end
 end
 
-local final = table.concat(out, "\n")
-print(final)
-setclipboard(final)
-warn("[Vhalzeth] Hasil scan sudah di-copy ke clipboard!")
+print("=== REPLICATEDSTORAGE DATA ===")
+local dataFolder = game:GetService("ReplicatedStorage"):FindFirstChild("Data")
+if dataFolder then
+    for _, v in ipairs(dataFolder:GetChildren()) do
+        print("DATA:", v.ClassName, v.Name)
+        for _, c in ipairs(v:GetChildren()) do
+            if c:IsA("ModuleScript") or c:IsA("StringValue") or c:IsA("Folder") then
+                print("  -", c.ClassName, c.Name)
+            end
+        end
+    end
+end
